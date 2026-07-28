@@ -14,7 +14,7 @@ class IDCardScannerApp:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("身份证 1:1 精准透视校正与 PDF 拼版工具 (智能识别版)")
+        self.root.title("身份证 1:1 精准透视校正与 PDF 拼版工具 (边线交点拟合版)")
         self.root.geometry("1150x820")
 
         # 数据状态
@@ -157,63 +157,151 @@ class IDCardScannerApp:
         self.canvas.bind("<B1-Motion>", self.on_mouse_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_mouse_release)
 
+    def _order_points(self, pts):
+        """对 4 个坐标点按照 [左上, 右上, 右下, 左下] 进行排序"""
+        rect = np.zeros((4, 2), dtype="float32")
+        s = pts.sum(axis=1)
+        rect[0] = pts[np.argmin(s)]  # 左上
+        rect[2] = pts[np.argmax(s)]  # 右下
+
+        diff = np.diff(pts, axis=1)
+        rect[1] = pts[np.argmin(diff)]  # 右上
+        rect[3] = pts[np.argmax(diff)]  # 左下
+        return rect
+
+    def _calc_line_intersection(self, line1, line2):
+        """计算两条直线的延长线交点 (Ax + By + C = 0)"""
+        vx1, vy1, x1, y1 = (
+            float(line1[0][0]),
+            float(line1[1][0]),
+            float(line1[2][0]),
+            float(line1[3][0]),
+        )
+        vx2, vy2, x2, y2 = (
+            float(line2[0][0]),
+            float(line2[1][0]),
+            float(line2[2][0]),
+            float(line2[3][0]),
+        )
+
+        A1, B1 = vy1, -vx1
+        C1 = vx1 * y1 - vy1 * x1
+
+        A2, B2 = vy2, -vx2
+        C2 = vx2 * y2 - vy2 * x2
+
+        det = A1 * B2 - A2 * B1
+        if abs(det) < 1e-5:
+            return None  # 平行无交点
+
+        x = (B1 * C2 - B2 * C1) / det
+        y = (A2 * C1 - A1 * C2) / det
+        return [x, y]
+
     def auto_detect_card_corners(self):
-        """核心算法：使用灰度、高斯模糊、Canny边缘检测识别证件边缘四角"""
+        """高阶算法：剔除圆角 + 直线方程拟合 + 延长线求交点"""
         if self.raw_bgr_img is None:
             return None
 
         h, w = self.raw_bgr_img.shape[:2]
-        gray = cv2.cvtColor(self.raw_bgr_img, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-
-        # Otsu 自动阈值 Canny 边缘检测
-        otsu_thresh, _ = cv2.threshold(
-            blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-        )
-        canny = cv2.Canny(blurred, otsu_thresh * 0.4, otsu_thresh)
-
-        # 膨胀操作，连接不连续边缘
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        dilated = cv2.dilate(canny, kernel, iterations=2)
-
-        # 查找轮廓
-        contours, _ = cv2.findContours(
-            dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
-        contours = sorted(contours, key=cv2.contourArea, reverse=True)
-
-        card_cnt = None
         img_area = w * h
 
+        # 1. 灰度与高斯降噪
+        gray = cv2.cvtColor(self.raw_bgr_img, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (9, 9), 0)
+
+        # 2. Otsu 二值化分割前景与背景
+        _, thresh = cv2.threshold(
+            blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+        )
+
+        # 3. 闭运算填充卡片内部杂色
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
+        closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+
+        # 4. 提取轮廓并锁定最大卡片连通域
+        contours, _ = cv2.findContours(
+            closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
+        )
+        if not contours:
+            return None
+
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)
+        card_cnt = None
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            # 过滤面积过小或过大的无效轮廓（卡片面积通常占全图 15% - 95%）
-            if 0.15 * img_area < area < 0.98 * img_area:
-                peri = cv2.arcLength(cnt, True)
-                approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
-                # 寻找四边形多边形
-                if len(approx) == 4:
-                    card_cnt = approx
-                    break
+            if 0.10 * img_area < area < 0.95 * img_area:
+                card_cnt = cnt
+                break
 
-        if card_cnt is not None:
-            pts = card_cnt.reshape(4, 2)
-            # 排序 4 个顶点：左上、右上、右下、左下
-            rect = np.zeros((4, 2), dtype="float32")
-            s = pts.sum(axis=1)
-            rect[0] = pts[np.argmin(s)]  # 左上
-            rect[2] = pts[np.argmax(s)]  # 右下
+        if card_cnt is None:
+            return None
 
-            diff = np.diff(pts, axis=1)
-            rect[1] = pts[np.argmin(diff)]  # 右上
-            rect[3] = pts[np.argmax(diff)]  # 左下
+        # 5. 获取带角度的外接矩形作为参考边框
+        rect_rot = cv2.minAreaRect(card_cnt)
+        box = cv2.boxPoints(rect_rot)
+        ref_pts = self._order_points(box)  # 顺序: [TL, TR, BR, BL]
 
-            # 缩放到 Canvas 当前显示比例
-            scale = self.display_scale
-            disp_pts = [[float(p[0] * scale), float(p[1] * scale)] for p in rect]
-            return disp_pts
+        # 6. 对 4 条边分别收集中间 60% 的直线段点集（避开两端 R 弧角）
+        cnt_pts = card_cnt.reshape(-1, 2)
+        fitted_lines = []  # 顺序：0:Top, 1:Right, 2:Bottom, 3:Left
 
-        return None
+        for i in range(4):
+            p_a = ref_pts[i]
+            p_b = ref_pts[(i + 1) % 4]
+
+            vec_e = p_b - p_a
+            length = np.linalg.norm(vec_e)
+            if length < 1e-5:
+                fitted_lines.append(None)
+                continue
+            dir_e = vec_e / length
+
+            edge_pts = []
+            for pt in cnt_pts:
+                v = pt - p_a
+                t = np.dot(v, dir_e)  # 投影轴坐标
+
+                # 关键：仅提取距离边线近且在 20% ~ 80% 之间的点，彻底舍弃两头圆角
+                if 0.20 * length <= t <= 0.80 * length:
+                    dist = abs(v[0] * dir_e[1] - v[1] * dir_e[0])
+                    if dist <= max(12.0, length * 0.04):
+                        edge_pts.append(pt)
+
+            if len(edge_pts) >= 5:
+                pts_arr = np.array(edge_pts, dtype=np.float32)
+                # 最小二乘法拟合直线
+                line = cv2.fitLine(pts_arr, cv2.DIST_L2, 0, 0.01, 0.01)
+                fitted_lines.append(line)
+            else:
+                fitted_lines.append(None)
+
+        # 7. 计算四条拟合直线的两两延长线交点
+        # 角点 0 (TL): Left(3) ∩ Top(0)
+        # 角点 1 (TR): Top(0) ∩ Right(1)
+        # 角点 2 (BR): Right(1) ∩ Bottom(2)
+        # 角点 3 (BL): Bottom(2) ∩ Left(3)
+        intersection_corners = []
+        for i in range(4):
+            line_prev = fitted_lines[(i - 1) % 4]
+            line_curr = fitted_lines[i]
+
+            if line_prev is not None and line_curr is not None:
+                pt_inter = self._calc_line_intersection(line_prev, line_curr)
+                if pt_inter is not None:
+                    intersection_corners.append(pt_inter)
+                else:
+                    intersection_corners.append(ref_pts[i].tolist())
+            else:
+                intersection_corners.append(ref_pts[i].tolist())
+
+        # 8. 缩放到 Canvas 画布当前比例
+        scale = self.display_scale
+        disp_pts = [
+            [float(p[0] * scale), float(p[1] * scale)]
+            for p in intersection_corners
+        ]
+        return disp_pts
 
     def load_images(self):
         paths = filedialog.askopenfilenames(
@@ -278,7 +366,6 @@ class IDCardScannerApp:
         if auto_pts is not None:
             self.points = auto_pts
         else:
-            # 自动识别未成功时，退回默认预设框
             margin_w = disp_w * 0.12
             margin_h = disp_h * 0.12
             self.points = [

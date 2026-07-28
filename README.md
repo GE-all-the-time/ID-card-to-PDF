@@ -1,6 +1,6 @@
 # 🆔 身份证 1:1 精准透视校正与 PDF 拼版工具
 
-> **一个基于 Python、OpenCV 和 Tkinter 开发的高精度证件扫描校正与 A4 PDF 拼版工具。**
+> **一个基于 Python、OpenCV 和 Tkinter 开发的高精度证件扫描校正与 A4 PDF 拼版工具。**  
 > 专门解决手机拍摄身份证/卡片时产生的**倾斜透视变形、背景杂乱、黑边干扰以及打印尺寸不一致**等痛点。
 
 ---
@@ -20,7 +20,7 @@
 
 本项目的核心运作流程分为**图像处理**、**GUI 画布交互**与**PDF 物理排版**三大模块：
 
-```
+```text
 [原始图片/多选] ➔ [OpenCV 智能找角 & 圆角避让] ➔ [透视变换 & 白化黑边] ➔ [单点连续保存] ➔ [ReportLab 1:1 毫米换算] ➔ [导出 A4 PDF]
 
 ```
@@ -53,6 +53,12 @@
 
 ### 2. 安装依赖
 
+克隆仓库并安装所需的第三方库：
+
+```bash
+# 克隆仓库
+git clone [https://github.com/YourUsername/YourRepoName.git](https://github.com/YourUsername/YourRepoName.git)
+cd YourRepoName
 
 # 安装依赖
 pip install opencv-python numpy Pillow reportlab pyinstaller
@@ -119,5 +125,9 @@ Set-ExecutionPolicy -Scope Process Bypass
 ├── core.py         # 主程序代码 (UI逻辑、图像算法、PDF排版)
 ├── package.ps1     # Windows PowerShell 自动化单文件打包脚本
 └── README.md       # 项目说明文档
+
+```
+
+```
 
 ```

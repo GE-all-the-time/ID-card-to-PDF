@@ -14,7 +14,7 @@ class IDCardScannerApp:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("身份证 1:1 精准透视校正与 PDF 拼版工具 (专业版)")
+        self.root.title("身份证 1:1 精准透视校正与 PDF 拼版工具 (智能识别版)")
         self.root.geometry("1150x820")
 
         # 数据状态
@@ -29,8 +29,7 @@ class IDCardScannerApp:
         self.line_ids = []
         self.drag_idx = None
 
-        # 已完成校正处理的图片列表，存放字典：
-        # {"img": numpy_bgr, "w": w_mm, "h": h_mm, "name": title_str}
+        # 已完成校正处理的图片列表
         self.processed_records = []
 
         self._build_ui()
@@ -102,8 +101,13 @@ class IDCardScannerApp:
         ttk.Separator(right_frame, orient="horizontal").pack(fill=tk.X, pady=10)
 
         # 3. 辅助与导出按钮
+        btn_auto_detect = ttk.Button(
+            right_frame, text="🤖 重新自动识别边缘", command=self.auto_detect_and_update
+        )
+        btn_auto_detect.pack(fill=tk.X, pady=3)
+
         btn_reset_pts = ttk.Button(
-            right_frame, text="重置裁剪框", command=self.reset_points
+            right_frame, text="重置默认裁剪框", command=self.reset_points
         )
         btn_reset_pts.pack(fill=tk.X, pady=3)
 
@@ -152,6 +156,64 @@ class IDCardScannerApp:
         self.canvas.bind("<ButtonPress-1>", self.on_mouse_press)
         self.canvas.bind("<B1-Motion>", self.on_mouse_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_mouse_release)
+
+    def auto_detect_card_corners(self):
+        """核心算法：使用灰度、高斯模糊、Canny边缘检测识别证件边缘四角"""
+        if self.raw_bgr_img is None:
+            return None
+
+        h, w = self.raw_bgr_img.shape[:2]
+        gray = cv2.cvtColor(self.raw_bgr_img, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+
+        # Otsu 自动阈值 Canny 边缘检测
+        otsu_thresh, _ = cv2.threshold(
+            blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+        )
+        canny = cv2.Canny(blurred, otsu_thresh * 0.4, otsu_thresh)
+
+        # 膨胀操作，连接不连续边缘
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        dilated = cv2.dilate(canny, kernel, iterations=2)
+
+        # 查找轮廓
+        contours, _ = cv2.findContours(
+            dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)
+
+        card_cnt = None
+        img_area = w * h
+
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            # 过滤面积过小或过大的无效轮廓（卡片面积通常占全图 15% - 95%）
+            if 0.15 * img_area < area < 0.98 * img_area:
+                peri = cv2.arcLength(cnt, True)
+                approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
+                # 寻找四边形多边形
+                if len(approx) == 4:
+                    card_cnt = approx
+                    break
+
+        if card_cnt is not None:
+            pts = card_cnt.reshape(4, 2)
+            # 排序 4 个顶点：左上、右上、右下、左下
+            rect = np.zeros((4, 2), dtype="float32")
+            s = pts.sum(axis=1)
+            rect[0] = pts[np.argmin(s)]  # 左上
+            rect[2] = pts[np.argmax(s)]  # 右下
+
+            diff = np.diff(pts, axis=1)
+            rect[1] = pts[np.argmin(diff)]  # 右上
+            rect[3] = pts[np.argmax(diff)]  # 左下
+
+            # 缩放到 Canvas 当前显示比例
+            scale = self.display_scale
+            disp_pts = [[float(p[0] * scale), float(p[1] * scale)] for p in rect]
+            return disp_pts
+
+        return None
 
     def load_images(self):
         paths = filedialog.askopenfilenames(
@@ -211,20 +273,48 @@ class IDCardScannerApp:
         self.canvas.config(width=disp_w, height=disp_h)
         self.canvas.create_image(0, 0, anchor=tk.NW, image=self.photo_image)
 
-        margin_w = disp_w * 0.12
-        margin_h = disp_h * 0.12
-        self.points = [
-            [margin_w, margin_h],
-            [disp_w - margin_w, margin_h],
-            [disp_w - margin_w, disp_h - margin_h],
-            [margin_w, disp_h - margin_h],
-        ]
+        # 优先使用自动识别贴合
+        auto_pts = self.auto_detect_card_corners()
+        if auto_pts is not None:
+            self.points = auto_pts
+        else:
+            # 自动识别未成功时，退回默认预设框
+            margin_w = disp_w * 0.12
+            margin_h = disp_h * 0.12
+            self.points = [
+                [margin_w, margin_h],
+                [disp_w - margin_w, margin_h],
+                [disp_w - margin_w, disp_h - margin_h],
+                [margin_w, disp_h - margin_h],
+            ]
 
         self.draw_handles()
 
+    def auto_detect_and_update(self):
+        """用户点击按钮重新自动识别"""
+        auto_pts = self.auto_detect_card_corners()
+        if auto_pts is not None:
+            self.points = auto_pts
+            self.draw_handles()
+        else:
+            messagebox.showwarning(
+                "识别提示",
+                "未能自动识别到明显的证件边缘轮廓，请手动拖动角点对齐。",
+            )
+
     def reset_points(self):
         if self.raw_bgr_img is not None:
-            self.show_image()
+            disp_w = self.canvas.winfo_width()
+            disp_h = self.canvas.winfo_height()
+            margin_w = disp_w * 0.12
+            margin_h = disp_h * 0.12
+            self.points = [
+                [margin_w, margin_h],
+                [disp_w - margin_w, margin_h],
+                [disp_w - margin_w, disp_h - margin_h],
+                [margin_w, disp_h - margin_h],
+            ]
+            self.draw_handles()
 
     def draw_handles(self):
         for item in self.handle_ids + self.line_ids:
@@ -436,7 +526,6 @@ class IDCardScannerApp:
         )
 
     def open_manager_window(self):
-        """打开已就绪卡片管理与排序窗口"""
         if not self.processed_records:
             messagebox.showinfo("提示", "当前没有已就绪的卡片！")
             return
@@ -446,7 +535,6 @@ class IDCardScannerApp:
         manager_win.geometry("600x650")
         manager_win.transient(self.root)
 
-        # 头部说明
         top_tip = ttk.Label(
             manager_win,
             text="💡 提示：每页 A4 放置 2 张卡片。你可以调整顺序或删除卡片。",
@@ -455,7 +543,6 @@ class IDCardScannerApp:
         )
         top_tip.pack(anchor=tk.W, padx=15, pady=(10, 5))
 
-        # 带滚动条的容器
         container = ttk.Frame(manager_win)
         container.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
@@ -497,7 +584,6 @@ class IDCardScannerApp:
                 refresh_list()
 
         def refresh_list():
-            # 清理旧组件
             for widget in scroll_frame.winfo_children():
                 widget.destroy()
 
@@ -512,13 +598,12 @@ class IDCardScannerApp:
                 text=f"已就绪卡片: {len(self.processed_records)} 张"
             )
 
-            manager_win.thumbnails = []  # 保持图片引用防止 GC
+            manager_win.thumbnails = []
 
             for idx, item in enumerate(self.processed_records):
                 page_num = (idx // 2) + 1
                 slot_name = "【正面/上部】" if (idx % 2 == 0) else "【背面/下部】"
 
-                # 遇到每一页的第一张时，绘制 PDF 页码分组标题
                 if idx % 2 == 0:
                     group_frame = ttk.Frame(scroll_frame)
                     group_frame.pack(fill=tk.X, pady=(15, 5), padx=5)
@@ -532,13 +617,11 @@ class IDCardScannerApp:
                         side=tk.LEFT, fill=tk.X, expand=True, padx=10
                     )
 
-                # 单张卡片卡槽
                 row_frame = ttk.Frame(
                     scroll_frame, padding=6, relief="groove", borderwidth=1
                 )
                 row_frame.pack(fill=tk.X, pady=3, padx=5)
 
-                # 1. 位置标识
                 lbl_pos = ttk.Label(
                     row_frame,
                     text=slot_name,
@@ -548,7 +631,6 @@ class IDCardScannerApp:
                 )
                 lbl_pos.pack(side=tk.LEFT, padx=2)
 
-                # 2. 缩略图生成
                 thumb_bgr = cv2.resize(item["img"], (70, 44))
                 thumb_rgb = cv2.cvtColor(thumb_bgr, cv2.COLOR_BGR2RGB)
                 thumb_pil = Image.fromarray(thumb_rgb)
@@ -558,14 +640,12 @@ class IDCardScannerApp:
                 lbl_thumb = ttk.Label(row_frame, image=thumb_tk)
                 lbl_thumb.pack(side=tk.LEFT, padx=5)
 
-                # 3. 卡片名称与尺寸
                 info_text = f"{item['name']}\n尺寸: {item['w']}mm x {item['h']}mm"
                 lbl_info = ttk.Label(
                     row_frame, text=info_text, font=("SimSun", 9)
                 )
                 lbl_info.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
 
-                # 4. 操作按钮组
                 btn_frame = ttk.Frame(row_frame)
                 btn_frame.pack(side=tk.RIGHT)
 

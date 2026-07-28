@@ -14,8 +14,8 @@ class IDCardScannerApp:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("身份证 1:1 精准透视校正与 PDF 拼版工具 (边线交点拟合版)")
-        self.root.geometry("1150x820")
+        self.root.title("身份证 1:1 精准透视校正与 PDF 拼版工具 (极速单点流版)")
+        self.root.geometry("1180x830")
 
         # 数据状态
         self.image_paths = []
@@ -35,118 +35,159 @@ class IDCardScannerApp:
         self._build_ui()
 
     def _build_ui(self):
-        # 顶端控制面板
-        top_frame = ttk.Frame(self.root, padding=10)
+        # 顶端控制面板 (步骤 1 与 翻页)
+        top_frame = ttk.Frame(self.root, padding=(10, 8))
         top_frame.pack(side=tk.TOP, fill=tk.X)
 
-        btn_load = ttk.Button(
-            top_frame, text="1. 选择身份证图片(可多选)", command=self.load_images
+        # 步骤 1 主按钮
+        btn_load = tk.Button(
+            top_frame,
+            text="📁 1. 选择身份证图片 (可多选)",
+            font=("Microsoft YaHei UI", 10, "bold"),
+            bg="#0078D4",
+            fg="white",
+            activebackground="#005A9E",
+            activeforeground="white",
+            bd=0,
+            padx=12,
+            pady=5,
+            cursor="hand2",
+            command=self.load_images,
         )
-        btn_load.pack(side=tk.LEFT, padx=5)
+        btn_load.pack(side=tk.LEFT, padx=(5, 10))
 
         self.lbl_file_info = ttk.Label(
-            top_frame, text="未加载图片", font=("Arial", 10, "bold")
+            top_frame, text="未加载图片", font=("Microsoft YaHei UI", 10, "bold")
         )
-        self.lbl_file_info.pack(side=tk.LEFT, padx=15)
+        self.lbl_file_info.pack(side=tk.LEFT, padx=10)
+
+        # 翻页控制 (备用/回溯按钮)
+        self.btn_next = ttk.Button(
+            top_frame, text="下一张 ▶", command=self.next_image, state=tk.DISABLED
+        )
+        self.btn_next.pack(side=tk.RIGHT, padx=5)
 
         self.btn_prev = ttk.Button(
             top_frame, text="◀ 上一张", command=self.prev_image, state=tk.DISABLED
         )
-        self.btn_prev.pack(side=tk.LEFT, padx=2)
+        self.btn_prev.pack(side=tk.RIGHT, padx=2)
 
-        self.btn_next = ttk.Button(
-            top_frame, text="下一张 ▶", command=self.next_image, state=tk.DISABLED
-        )
-        self.btn_next.pack(side=tk.LEFT, padx=2)
+        # 右侧参数设置与核心流程面板
+        right_frame = ttk.Frame(self.root, padding=10, width=310)
+        right_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 10), pady=10)
+        right_frame.pack_propagate(False)
 
-        # 右侧参数设置与操作面板
-        right_frame = ttk.LabelFrame(self.root, text="设置与操作", padding=10)
-        right_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=10, pady=10)
+        # === 区块 1：基本尺寸与去黑边参数 ===
+        param_frame = ttk.LabelFrame(right_frame, text="⚙️ 校正参数设置", padding=8)
+        param_frame.pack(fill=tk.X, pady=(0, 10))
 
-        # 1. 尺寸设置
-        ttk.Label(
-            right_frame, text="目标物理宽度 (mm):", font=("SimSun", 9)
-        ).pack(anchor=tk.W, pady=(5, 2))
-        self.entry_w = ttk.Entry(right_frame, width=12)
+        grid_p = ttk.Frame(param_frame)
+        grid_p.pack(fill=tk.X)
+
+        ttk.Label(grid_p, text="目标宽度(mm):").grid(row=0, column=0, sticky=tk.W, pady=2)
+        self.entry_w = ttk.Entry(grid_p, width=8)
         self.entry_w.insert(0, "85.6")
-        self.entry_w.pack(anchor=tk.W)
+        self.entry_w.grid(row=0, column=1, sticky=tk.E, pady=2)
 
-        ttk.Label(
-            right_frame, text="目标物理高度 (mm):", font=("SimSun", 9)
-        ).pack(anchor=tk.W, pady=(5, 2))
-        self.entry_h = ttk.Entry(right_frame, width=12)
+        ttk.Label(grid_p, text="目标高度(mm):").grid(row=1, column=0, sticky=tk.W, pady=2)
+        self.entry_h = ttk.Entry(grid_p, width=8)
         self.entry_h.insert(0, "54.0")
-        self.entry_h.pack(anchor=tk.W)
+        self.entry_h.grid(row=1, column=1, sticky=tk.E, pady=2)
 
-        ttk.Separator(right_frame, orient="horizontal").pack(fill=tk.X, pady=10)
+        ttk.Separator(param_frame, orient="horizontal").pack(fill=tk.X, pady=6)
 
-        # 2. 边缘深色去除设置
         self.var_remove_dark = tk.BooleanVar(value=True)
         chk_dark = ttk.Checkbutton(
-            right_frame,
-            text="去除/白化边缘深色残余",
+            param_frame,
+            text="去除/白化边缘黑边",
             variable=self.var_remove_dark,
         )
-        chk_dark.pack(anchor=tk.W, pady=2)
+        chk_dark.pack(anchor=tk.W)
 
-        ttk.Label(
-            right_frame, text="深色阈值 (0-255):", font=("SimSun", 8)
-        ).pack(anchor=tk.W)
+        sub_dark_frame = ttk.Frame(param_frame)
+        sub_dark_frame.pack(fill=tk.X, pady=(2, 0))
+        ttk.Label(sub_dark_frame, text="黑边阈值:").pack(side=tk.LEFT)
         self.spin_thresh = ttk.Spinbox(
-            right_frame, from_=10, to=150, increment=5, width=8
+            sub_dark_frame, from_=10, to=150, increment=5, width=6
         )
         self.spin_thresh.set(80)
-        self.spin_thresh.pack(anchor=tk.W, pady=(0, 5))
+        self.spin_thresh.pack(side=tk.RIGHT)
 
-        ttk.Separator(right_frame, orient="horizontal").pack(fill=tk.X, pady=10)
+        # === 区块 2：辅助工具栏（横向紧凑收纳） ===
+        aux_frame = ttk.LabelFrame(right_frame, text="🛠️ 辅助微调 (可选)", padding=6)
+        aux_frame.pack(fill=tk.X, pady=(0, 15))
 
-        # 3. 辅助与导出按钮
+        btn_grid = ttk.Frame(aux_frame)
+        btn_grid.pack(fill=tk.X)
+
         btn_auto_detect = ttk.Button(
-            right_frame, text="🤖 重新自动识别边缘", command=self.auto_detect_and_update
+            btn_grid, text="🤖 重新识别", width=9, command=self.auto_detect_and_update
         )
-        btn_auto_detect.pack(fill=tk.X, pady=3)
+        btn_auto_detect.grid(row=0, column=0, padx=2, pady=2)
 
         btn_reset_pts = ttk.Button(
-            right_frame, text="重置默认裁剪框", command=self.reset_points
+            btn_grid, text="🔄 重置", width=7, command=self.reset_points
         )
-        btn_reset_pts.pack(fill=tk.X, pady=3)
+        btn_reset_pts.grid(row=0, column=1, padx=2, pady=2)
 
         btn_preview = ttk.Button(
-            right_frame, text="🔍 预览校正效果", command=self.preview_crop
+            btn_grid, text="🔍 预览", width=7, command=self.preview_crop
         )
-        btn_preview.pack(fill=tk.X, pady=3)
+        btn_preview.grid(row=0, column=2, padx=2, pady=2)
 
-        btn_crop = ttk.Button(
+        # === 区块 3：主流程 - 步骤 2 (一键保存并跳下一张) ===
+        btn_crop = tk.Button(
             right_frame,
-            text="2. 确认并保存当前页",
+            text="✔ 2. 确认并保存当前页",
+            font=("Microsoft YaHei UI", 11, "bold"),
+            bg="#0078D4",
+            fg="white",
+            activebackground="#005A9E",
+            activeforeground="white",
+            bd=0,
+            pady=10,
+            cursor="hand2",
             command=self.process_current,
         )
-        btn_crop.pack(fill=tk.X, pady=3)
+        btn_crop.pack(fill=tk.X, pady=(5, 15))
 
-        ttk.Separator(right_frame, orient="horizontal").pack(fill=tk.X, pady=10)
+        # === 区块 4：卡片管理区 ===
+        status_frame = ttk.LabelFrame(right_frame, text="📋 已添加卡片列表", padding=8)
+        status_frame.pack(fill=tk.X, pady=(0, 15))
 
-        # 4. 卡片管理与状态显示
         self.lbl_status = ttk.Label(
-            right_frame, text="已就绪卡片: 0 张", foreground="blue"
+            status_frame,
+            text="当前已就绪: 0 张",
+            font=("Microsoft YaHei UI", 9, "bold"),
+            foreground="#107C41",
         )
-        self.lbl_status.pack(anchor=tk.W, pady=2)
+        self.lbl_status.pack(anchor=tk.W, pady=(0, 5))
 
         btn_manage = ttk.Button(
-            right_frame, text="📋 管理/排序已就绪卡片", command=self.open_manager_window
+            status_frame, text="📑 管理 / 调整已就绪卡片", command=self.open_manager_window
         )
-        btn_manage.pack(fill=tk.X, pady=5)
+        btn_manage.pack(fill=tk.X)
 
-        ttk.Separator(right_frame, orient="horizontal").pack(fill=tk.X, pady=10)
-
-        btn_export = ttk.Button(
-            right_frame, text="3. 导出为 A4 PDF", command=self.export_pdf
+        # === 区块 5：主流程 - 步骤 3 (终极导出) ===
+        btn_export = tk.Button(
+            right_frame,
+            text="🚀 3. 导出为 A4 PDF",
+            font=("Microsoft YaHei UI", 11, "bold"),
+            bg="#107C41",
+            fg="white",
+            activebackground="#0B5A2F",
+            activeforeground="white",
+            bd=0,
+            pady=12,
+            cursor="hand2",
+            command=self.export_pdf,
         )
-        btn_export.pack(fill=tk.X, pady=10)
+        btn_export.pack(fill=tk.X, side=tk.BOTTOM, pady=10)
 
         # 中央 Canvas 画布区域
         canvas_frame = ttk.Frame(self.root)
         canvas_frame.pack(
-            side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10
+            side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 10), pady=10
         )
 
         self.canvas = tk.Canvas(canvas_frame, bg="#2b2b2b")
@@ -262,7 +303,7 @@ class IDCardScannerApp:
                 v = pt - p_a
                 t = np.dot(v, dir_e)  # 投影轴坐标
 
-                # 关键：仅提取距离边线近且在 20% ~ 80% 之间的点，彻底舍弃两头圆角
+                # 仅提取距离边线近且在 20% ~ 80% 之间的点，彻底舍弃两头圆角
                 if 0.20 * length <= t <= 0.80 * length:
                     dist = abs(v[0] * dir_e[1] - v[1] * dir_e[0])
                     if dist <= max(12.0, length * 0.04):
@@ -277,10 +318,6 @@ class IDCardScannerApp:
                 fitted_lines.append(None)
 
         # 7. 计算四条拟合直线的两两延长线交点
-        # 角点 0 (TL): Left(3) ∩ Top(0)
-        # 角点 1 (TR): Top(0) ∩ Right(1)
-        # 角点 2 (BR): Right(1) ∩ Bottom(2)
-        # 角点 3 (BL): Bottom(2) ∩ Left(3)
         intersection_corners = []
         for i in range(4):
             line_prev = fitted_lines[(i - 1) % 4]
@@ -314,7 +351,7 @@ class IDCardScannerApp:
         self.image_paths = list(paths)
         self.current_idx = 0
         self.processed_records = []
-        self.lbl_status.config(text="已就绪卡片: 0 张")
+        self.lbl_status.config(text="当前已就绪: 0 张")
 
         self.show_image()
 
@@ -584,7 +621,7 @@ class IDCardScannerApp:
         lbl_tip = ttk.Label(
             preview_win,
             text=f"实际物理导出尺寸：{w_mm} mm x {h_mm} mm",
-            font=("Arial", 10, "bold"),
+            font=("Microsoft YaHei UI", 10, "bold"),
         )
         lbl_tip.pack(pady=5)
 
@@ -600,17 +637,22 @@ class IDCardScannerApp:
             "img": warped,
             "w": w_mm,
             "h": h_mm,
-            "name": card_name
+            "name": card_name,
         }
 
         self.processed_records.append(record)
         self.lbl_status.config(
-            text=f"已就绪卡片: {len(self.processed_records)} 张"
+            text=f"当前已就绪: {len(self.processed_records)} 张"
         )
-        messagebox.showinfo(
-            "提示",
-            f"当前卡片已保存！\n当前共有 {len(self.processed_records)} 张已就绪卡片。",
-        )
+
+        # 💡 优化交互：如果不为最后一张，保存后自动切换至下一张
+        if self.current_idx < len(self.image_paths) - 1:
+            self.next_image()
+        else:
+            messagebox.showinfo(
+                "全部处理完成",
+                f"🎉 当前所有图片均已保存完毕！\n列表中共有 {len(self.processed_records)} 张卡片已就绪。\n现在可以点击『3. 导出为 A4 PDF』进行排版导出。",
+            )
 
     def open_manager_window(self):
         if not self.processed_records:
@@ -624,8 +666,8 @@ class IDCardScannerApp:
 
         top_tip = ttk.Label(
             manager_win,
-            text="💡 提示：每页 A4 放置 2 张卡片。你可以调整顺序或删除卡片。",
-            font=("Arial", 9),
+            text="💡 提示：每页 A4 放置 2 张卡片。您可以拖动排序或删除卡片。",
+            font=("Microsoft YaHei UI", 9),
             foreground="gray",
         )
         top_tip.pack(anchor=tk.W, padx=15, pady=(10, 5))
@@ -676,13 +718,13 @@ class IDCardScannerApp:
 
             if not self.processed_records:
                 ttk.Label(
-                    scroll_frame, text="暂无卡片", font=("Arial", 11)
+                    scroll_frame, text="暂无卡片", font=("Microsoft YaHei UI", 11)
                 ).pack(pady=30)
-                self.lbl_status.config(text="已就绪卡片: 0 张")
+                self.lbl_status.config(text="当前已就绪: 0 张")
                 return
 
             self.lbl_status.config(
-                text=f"已就绪卡片: {len(self.processed_records)} 张"
+                text=f"当前已就绪: {len(self.processed_records)} 张"
             )
 
             manager_win.thumbnails = []
@@ -697,7 +739,7 @@ class IDCardScannerApp:
                     ttk.Label(
                         group_frame,
                         text=f"📄 PDF 第 {page_num} 页",
-                        font=("Arial", 10, "bold"),
+                        font=("Microsoft YaHei UI", 10, "bold"),
                         foreground="#0055AA",
                     ).pack(side=tk.LEFT)
                     ttk.Separator(group_frame, orient="horizontal").pack(
@@ -713,7 +755,7 @@ class IDCardScannerApp:
                     row_frame,
                     text=slot_name,
                     width=13,
-                    font=("SimSun", 9, "bold"),
+                    font=("Microsoft YaHei UI", 9, "bold"),
                     foreground="#333333",
                 )
                 lbl_pos.pack(side=tk.LEFT, padx=2)
@@ -729,7 +771,7 @@ class IDCardScannerApp:
 
                 info_text = f"{item['name']}\n尺寸: {item['w']}mm x {item['h']}mm"
                 lbl_info = ttk.Label(
-                    row_frame, text=info_text, font=("SimSun", 9)
+                    row_frame, text=info_text, font=("Microsoft YaHei UI", 9)
                 )
                 lbl_info.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
 

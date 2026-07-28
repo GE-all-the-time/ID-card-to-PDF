@@ -55,12 +55,6 @@
 
 ### 2. 安装依赖
 
-克隆仓库并安装所需的第三方库：
-
-```bash
-# 克隆仓库
-git clone https://github.com/YourUsername/YourRepoName.git
-cd YourRepoName
 
 # 安装依赖
 pip install opencv-python numpy Pillow reportlab pyinstaller

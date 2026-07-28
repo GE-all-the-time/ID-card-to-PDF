@@ -14,8 +14,8 @@ class IDCardScannerApp:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("身份证 1:1 精准透视校正与 PDF 拼版工具 (增强版)")
-        self.root.geometry("1150x800")
+        self.root.title("身份证 1:1 精准透视校正与 PDF 拼版工具 (专业版)")
+        self.root.geometry("1150x820")
 
         # 数据状态
         self.image_paths = []
@@ -29,7 +29,8 @@ class IDCardScannerApp:
         self.line_ids = []
         self.drag_idx = None
 
-        # 已完成校正处理的图片列表: 元组 (numpy_bgr_array, width_mm, height_mm)
+        # 已完成校正处理的图片列表，存放字典：
+        # {"img": numpy_bgr, "w": w_mm, "h": h_mm, "name": title_str}
         self.processed_records = []
 
         self._build_ui()
@@ -80,7 +81,7 @@ class IDCardScannerApp:
 
         ttk.Separator(right_frame, orient="horizontal").pack(fill=tk.X, pady=10)
 
-        # 2. 优化模式设置（新增功能：边缘黑边去除）
+        # 2. 边缘深色去除设置
         self.var_remove_dark = tk.BooleanVar(value=True)
         chk_dark = ttk.Checkbutton(
             right_frame,
@@ -120,10 +121,18 @@ class IDCardScannerApp:
 
         ttk.Separator(right_frame, orient="horizontal").pack(fill=tk.X, pady=10)
 
+        # 4. 卡片管理与状态显示
         self.lbl_status = ttk.Label(
-            right_frame, text="已就绪页数: 0", foreground="blue"
+            right_frame, text="已就绪卡片: 0 张", foreground="blue"
         )
-        self.lbl_status.pack(anchor=tk.W, pady=5)
+        self.lbl_status.pack(anchor=tk.W, pady=2)
+
+        btn_manage = ttk.Button(
+            right_frame, text="📋 管理/排序已就绪卡片", command=self.open_manager_window
+        )
+        btn_manage.pack(fill=tk.X, pady=5)
+
+        ttk.Separator(right_frame, orient="horizontal").pack(fill=tk.X, pady=10)
 
         btn_export = ttk.Button(
             right_frame, text="3. 导出为 A4 PDF", command=self.export_pdf
@@ -155,7 +164,7 @@ class IDCardScannerApp:
         self.image_paths = list(paths)
         self.current_idx = 0
         self.processed_records = []
-        self.lbl_status.config(text="已就绪页数: 0")
+        self.lbl_status.config(text="已就绪卡片: 0 张")
 
         self.show_image()
 
@@ -202,7 +211,6 @@ class IDCardScannerApp:
         self.canvas.config(width=disp_w, height=disp_h)
         self.canvas.create_image(0, 0, anchor=tk.NW, image=self.photo_image)
 
-        # 默认 4 个控制点位置
         margin_w = disp_w * 0.12
         margin_h = disp_h * 0.12
         self.points = [
@@ -285,7 +293,6 @@ class IDCardScannerApp:
             self.show_image()
 
     def _get_processed_image(self):
-        """核心处理函数：完成透视校正 + 边缘深色自动替换为白色"""
         if self.raw_bgr_img is None:
             return None, 0, 0
 
@@ -296,7 +303,6 @@ class IDCardScannerApp:
             messagebox.showerror("输入错误", "请确认宽度和高度数值填写正确！")
             return None, 0, 0
 
-        # 计算高清映射坐标
         src_pts = np.float32(
             [
                 [p[0] / self.display_scale, p[1] / self.display_scale]
@@ -317,7 +323,6 @@ class IDCardScannerApp:
             ]
         )
 
-        # 1. 梯形透视校正
         M = cv2.getPerspectiveTransform(src_pts, dst_pts)
         warped = cv2.warpPerspective(
             self.raw_bgr_img,
@@ -326,7 +331,6 @@ class IDCardScannerApp:
             flags=cv2.INTER_CUBIC,
         )
 
-        # 2. 如果开启了深色边缘去除功能
         if self.var_remove_dark.get():
             try:
                 thresh_val = float(self.spin_thresh.get())
@@ -334,21 +338,15 @@ class IDCardScannerApp:
                 thresh_val = 80.0
 
             gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
-
-            # 阈值化：找出所有低于阈值的深色像素
             _, dark_mask = cv2.threshold(
                 gray, thresh_val, 255, cv2.THRESH_BINARY_INV
             )
 
-            # 提取连通至图像四周外边缘的深色区域 (采用 FloodFill 漫水填充)
             ff_mask = np.zeros(
                 (out_h_px + 2, out_w_px + 2), dtype=np.uint8
             )
-
-            # 在漫水填充前，先复制深色掩膜
             dark_seed_mask = dark_mask.copy()
 
-            # 遍历四周边缘像素点作为种子点
             seed_points = []
             for x in range(0, out_w_px, 3):
                 if dark_seed_mask[0, x] == 255:
@@ -371,11 +369,9 @@ class IDCardScannerApp:
                         flags=4 | (128 << 8),
                     )
 
-            # 将连通到边缘的深色背景填充为纯白色 (255, 255, 255)
             border_dark_pixels = dark_seed_mask == 128
             warped[border_dark_pixels] = [255, 255, 255]
 
-            # 边缘做 2px 微缩防羽化残影
             shrink_px = 2
             warped[:shrink_px, :] = [255, 255, 255]
             warped[-shrink_px:, :] = [255, 255, 255]
@@ -385,17 +381,14 @@ class IDCardScannerApp:
         return warped, target_w_mm, target_h_mm
 
     def preview_crop(self):
-        """生成并弹窗展示校正后的真实预览"""
         warped, w_mm, h_mm = self._get_processed_image()
         if warped is None:
             return
 
-        # 创建独立的预览窗口
         preview_win = tk.Toplevel(self.root)
         preview_win.title("校正效果预览")
         preview_win.geometry("700x500")
 
-        # 将图像缩放到适合预览的大小
         h, w = warped.shape[:2]
         max_preview_size = 600
         scale = min(max_preview_size / w, max_preview_size / h, 1.0)
@@ -408,7 +401,7 @@ class IDCardScannerApp:
         img_tk = ImageTk.PhotoImage(img_pil)
 
         lbl_img = ttk.Label(preview_win, image=img_tk)
-        lbl_img.image = img_tk  # 防止垃圾回收
+        lbl_img.image = img_tk
         lbl_img.pack(padx=20, pady=20, expand=True)
 
         lbl_tip = ttk.Label(
@@ -423,14 +416,188 @@ class IDCardScannerApp:
         if warped is None:
             return
 
-        self.processed_records.append((warped, w_mm, h_mm))
+        filename = os.path.basename(self.image_paths[self.current_idx])
+        card_name = f"卡片 #{len(self.processed_records)+1} ({filename})"
+
+        record = {
+            "img": warped,
+            "w": w_mm,
+            "h": h_mm,
+            "name": card_name
+        }
+
+        self.processed_records.append(record)
         self.lbl_status.config(
-            text=f"已就绪页数: {len(self.processed_records)}"
+            text=f"已就绪卡片: {len(self.processed_records)} 张"
         )
         messagebox.showinfo(
             "提示",
-            f"当前图片已成功校正保存！\n当前队列中共有: {len(self.processed_records)} 张图片",
+            f"当前卡片已保存！\n当前共有 {len(self.processed_records)} 张已就绪卡片。",
         )
+
+    def open_manager_window(self):
+        """打开已就绪卡片管理与排序窗口"""
+        if not self.processed_records:
+            messagebox.showinfo("提示", "当前没有已就绪的卡片！")
+            return
+
+        manager_win = tk.Toplevel(self.root)
+        manager_win.title("卡片排版管理与 PDF 分组预览")
+        manager_win.geometry("600x650")
+        manager_win.transient(self.root)
+
+        # 头部说明
+        top_tip = ttk.Label(
+            manager_win,
+            text="💡 提示：每页 A4 放置 2 张卡片。你可以调整顺序或删除卡片。",
+            font=("Arial", 9),
+            foreground="gray",
+        )
+        top_tip.pack(anchor=tk.W, padx=15, pady=(10, 5))
+
+        # 带滚动条的容器
+        container = ttk.Frame(manager_win)
+        container.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        canvas_mgr = tk.Canvas(container, borderwidth=0, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(
+            container, orient="vertical", command=canvas_mgr.yview
+        )
+        scroll_frame = ttk.Frame(canvas_mgr)
+
+        scroll_frame.bind(
+            "<Configure>",
+            lambda e: canvas_mgr.configure(
+                scrollregion=canvas_mgr.bbox("all")
+            ),
+        )
+        canvas_mgr.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas_mgr.configure(yscrollcommand=scrollbar.set)
+
+        canvas_mgr.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def move_item(index, direction):
+            new_idx = index + direction
+            if 0 <= new_idx < len(self.processed_records):
+                self.processed_records[index], self.processed_records[new_idx] = (
+                    self.processed_records[new_idx],
+                    self.processed_records[index],
+                )
+                refresh_list()
+
+        def delete_item(index):
+            item_name = self.processed_records[index]["name"]
+            if messagebox.askyesno(
+                "确认删除",
+                f"确定要删除 '{item_name}' 吗？",
+                parent=manager_win,
+            ):
+                self.processed_records.pop(index)
+                refresh_list()
+
+        def refresh_list():
+            # 清理旧组件
+            for widget in scroll_frame.winfo_children():
+                widget.destroy()
+
+            if not self.processed_records:
+                ttk.Label(
+                    scroll_frame, text="暂无卡片", font=("Arial", 11)
+                ).pack(pady=30)
+                self.lbl_status.config(text="已就绪卡片: 0 张")
+                return
+
+            self.lbl_status.config(
+                text=f"已就绪卡片: {len(self.processed_records)} 张"
+            )
+
+            manager_win.thumbnails = []  # 保持图片引用防止 GC
+
+            for idx, item in enumerate(self.processed_records):
+                page_num = (idx // 2) + 1
+                slot_name = "【正面/上部】" if (idx % 2 == 0) else "【背面/下部】"
+
+                # 遇到每一页的第一张时，绘制 PDF 页码分组标题
+                if idx % 2 == 0:
+                    group_frame = ttk.Frame(scroll_frame)
+                    group_frame.pack(fill=tk.X, pady=(15, 5), padx=5)
+                    ttk.Label(
+                        group_frame,
+                        text=f"📄 PDF 第 {page_num} 页",
+                        font=("Arial", 10, "bold"),
+                        foreground="#0055AA",
+                    ).pack(side=tk.LEFT)
+                    ttk.Separator(group_frame, orient="horizontal").pack(
+                        side=tk.LEFT, fill=tk.X, expand=True, padx=10
+                    )
+
+                # 单张卡片卡槽
+                row_frame = ttk.Frame(
+                    scroll_frame, padding=6, relief="groove", borderwidth=1
+                )
+                row_frame.pack(fill=tk.X, pady=3, padx=5)
+
+                # 1. 位置标识
+                lbl_pos = ttk.Label(
+                    row_frame,
+                    text=slot_name,
+                    width=13,
+                    font=("SimSun", 9, "bold"),
+                    foreground="#333333",
+                )
+                lbl_pos.pack(side=tk.LEFT, padx=2)
+
+                # 2. 缩略图生成
+                thumb_bgr = cv2.resize(item["img"], (70, 44))
+                thumb_rgb = cv2.cvtColor(thumb_bgr, cv2.COLOR_BGR2RGB)
+                thumb_pil = Image.fromarray(thumb_rgb)
+                thumb_tk = ImageTk.PhotoImage(thumb_pil)
+                manager_win.thumbnails.append(thumb_tk)
+
+                lbl_thumb = ttk.Label(row_frame, image=thumb_tk)
+                lbl_thumb.pack(side=tk.LEFT, padx=5)
+
+                # 3. 卡片名称与尺寸
+                info_text = f"{item['name']}\n尺寸: {item['w']}mm x {item['h']}mm"
+                lbl_info = ttk.Label(
+                    row_frame, text=info_text, font=("SimSun", 9)
+                )
+                lbl_info.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
+
+                # 4. 操作按钮组
+                btn_frame = ttk.Frame(row_frame)
+                btn_frame.pack(side=tk.RIGHT)
+
+                btn_up = ttk.Button(
+                    btn_frame,
+                    text="▲ 上移",
+                    width=6,
+                    command=lambda i=idx: move_item(i, -1),
+                )
+                if idx == 0:
+                    btn_up.config(state=tk.DISABLED)
+                btn_up.pack(side=tk.LEFT, padx=2)
+
+                btn_down = ttk.Button(
+                    btn_frame,
+                    text="▼ 下移",
+                    width=6,
+                    command=lambda i=idx: move_item(i, 1),
+                )
+                if idx == len(self.processed_records) - 1:
+                    btn_down.config(state=tk.DISABLED)
+                btn_down.pack(side=tk.LEFT, padx=2)
+
+                btn_del = ttk.Button(
+                    btn_frame,
+                    text="🗑️ 删除",
+                    width=6,
+                    command=lambda i=idx: delete_item(i),
+                )
+                btn_del.pack(side=tk.LEFT, padx=4)
+
+        refresh_list()
 
     def export_pdf(self):
         if not self.processed_records:
@@ -450,7 +617,11 @@ class IDCardScannerApp:
         temp_files = []
         max_per_page = 2
 
-        for idx, (warped_bgr, w_mm, h_mm) in enumerate(self.processed_records):
+        for idx, item in enumerate(self.processed_records):
+            warped_bgr = item["img"]
+            w_mm = item["w"]
+            h_mm = item["h"]
+
             page_slot = idx % max_per_page
 
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")

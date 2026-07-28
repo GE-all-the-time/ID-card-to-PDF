@@ -14,8 +14,8 @@ class IDCardScannerApp:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("身份证 1:1 精准透视校正与 PDF 拼版工具")
-        self.root.geometry("1100x780")
+        self.root.title("身份证 1:1 精准透视校正与 PDF 拼版工具 (增强版)")
+        self.root.geometry("1150x800")
 
         # 数据状态
         self.image_paths = []
@@ -60,43 +60,65 @@ class IDCardScannerApp:
         self.btn_next.pack(side=tk.LEFT, padx=2)
 
         # 右侧参数设置与操作面板
-        right_frame = ttk.LabelFrame(
-            self.root, text="设置与导出", padding=10
-        )
+        right_frame = ttk.LabelFrame(self.root, text="设置与操作", padding=10)
         right_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=10, pady=10)
 
-        # 尺寸输入 (默认中国二代身份证物理尺寸 85.6mm x 54.0mm)
+        # 1. 尺寸设置
         ttk.Label(
             right_frame, text="目标物理宽度 (mm):", font=("SimSun", 9)
-        ).pack(anchor=tk.W, pady=(10, 2))
+        ).pack(anchor=tk.W, pady=(5, 2))
         self.entry_w = ttk.Entry(right_frame, width=12)
         self.entry_w.insert(0, "85.6")
         self.entry_w.pack(anchor=tk.W)
 
         ttk.Label(
             right_frame, text="目标物理高度 (mm):", font=("SimSun", 9)
-        ).pack(anchor=tk.W, pady=(10, 2))
+        ).pack(anchor=tk.W, pady=(5, 2))
         self.entry_h = ttk.Entry(right_frame, width=12)
         self.entry_h.insert(0, "54.0")
         self.entry_h.pack(anchor=tk.W)
 
-        ttk.Separator(right_frame, orient="horizontal").pack(
-            fill=tk.X, pady=15
-        )
+        ttk.Separator(right_frame, orient="horizontal").pack(fill=tk.X, pady=10)
 
+        # 2. 优化模式设置（新增功能：边缘黑边去除）
+        self.var_remove_dark = tk.BooleanVar(value=True)
+        chk_dark = ttk.Checkbutton(
+            right_frame,
+            text="去除/白化边缘深色残余",
+            variable=self.var_remove_dark,
+        )
+        chk_dark.pack(anchor=tk.W, pady=2)
+
+        ttk.Label(
+            right_frame, text="深色阈值 (0-255):", font=("SimSun", 8)
+        ).pack(anchor=tk.W)
+        self.spin_thresh = ttk.Spinbox(
+            right_frame, from_=10, to=150, increment=5, width=8
+        )
+        self.spin_thresh.set(80)
+        self.spin_thresh.pack(anchor=tk.W, pady=(0, 5))
+
+        ttk.Separator(right_frame, orient="horizontal").pack(fill=tk.X, pady=10)
+
+        # 3. 辅助与导出按钮
         btn_reset_pts = ttk.Button(
             right_frame, text="重置裁剪框", command=self.reset_points
         )
-        btn_reset_pts.pack(fill=tk.X, pady=4)
+        btn_reset_pts.pack(fill=tk.X, pady=3)
+
+        btn_preview = ttk.Button(
+            right_frame, text="🔍 预览校正效果", command=self.preview_crop
+        )
+        btn_preview.pack(fill=tk.X, pady=3)
 
         btn_crop = ttk.Button(
-            right_frame, text="2. 校正并保存当前页", command=self.process_current
+            right_frame,
+            text="2. 确认并保存当前页",
+            command=self.process_current,
         )
-        btn_crop.pack(fill=tk.X, pady=4)
+        btn_crop.pack(fill=tk.X, pady=3)
 
-        ttk.Separator(right_frame, orient="horizontal").pack(
-            fill=tk.X, pady=15
-        )
+        ttk.Separator(right_frame, orient="horizontal").pack(fill=tk.X, pady=10)
 
         self.lbl_status = ttk.Label(
             right_frame, text="已就绪页数: 0", foreground="blue"
@@ -108,16 +130,16 @@ class IDCardScannerApp:
         )
         btn_export.pack(fill=tk.X, pady=10)
 
-        # 中央 Canvas 画布区域 (拖拽剪裁)
+        # 中央 Canvas 画布区域
         canvas_frame = ttk.Frame(self.root)
         canvas_frame.pack(
             side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10
         )
 
-        self.canvas = tk.Canvas(canvas_frame, bg="#333333")
+        self.canvas = tk.Canvas(canvas_frame, bg="#2b2b2b")
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
-        # 绑定鼠标事件
+        # 绑定鼠标拖拽事件
         self.canvas.bind("<ButtonPress-1>", self.on_mouse_press)
         self.canvas.bind("<B1-Motion>", self.on_mouse_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_mouse_release)
@@ -141,7 +163,6 @@ class IDCardScannerApp:
         if not self.image_paths:
             return
 
-        # 更新导航按钮
         self.btn_prev.config(
             state=tk.NORMAL if self.current_idx > 0 else tk.DISABLED
         )
@@ -154,7 +175,6 @@ class IDCardScannerApp:
             text=f"图片 ({self.current_idx + 1}/{len(self.image_paths)}): {os.path.basename(self.image_paths[self.current_idx])}"
         )
 
-        # 读取图片
         imgPath = self.image_paths[self.current_idx]
         self.raw_bgr_img = cv2.imread(imgPath)
         if self.raw_bgr_img is None:
@@ -163,18 +183,16 @@ class IDCardScannerApp:
 
         h, w = self.raw_bgr_img.shape[:2]
 
-        # 调整适应 Canvas 尺寸
         canvas_w = self.canvas.winfo_width() or 700
         canvas_h = self.canvas.winfo_height() or 550
 
         scale_w = canvas_w / w
         scale_h = canvas_h / h
-        self.display_scale = min(scale_w, scale_h, 1.0)  # 不放大超出原图
+        self.display_scale = min(scale_w, scale_h, 1.0)
 
         disp_w = int(w * self.display_scale)
         disp_h = int(h * self.display_scale)
 
-        # 转换并展示图片
         rgb_img = cv2.cvtColor(
             cv2.resize(self.raw_bgr_img, (disp_w, disp_h)), cv2.COLOR_BGR2RGB
         )
@@ -184,14 +202,14 @@ class IDCardScannerApp:
         self.canvas.config(width=disp_w, height=disp_h)
         self.canvas.create_image(0, 0, anchor=tk.NW, image=self.photo_image)
 
-        # 设置默认四角锚点 (按左上, 右上, 右下, 左下)
-        margin_w = disp_w * 0.15
-        margin_h = disp_h * 0.15
+        # 默认 4 个控制点位置
+        margin_w = disp_w * 0.12
+        margin_h = disp_h * 0.12
         self.points = [
-            [margin_w, margin_h],  # 左上
-            [disp_w - margin_w, margin_h],  # 右上
-            [disp_w - margin_w, disp_h - margin_h],  # 右下
-            [margin_w, disp_h - margin_h],  # 左下
+            [margin_w, margin_h],
+            [disp_w - margin_w, margin_h],
+            [disp_w - margin_w, disp_h - margin_h],
+            [margin_w, disp_h - margin_h],
         ]
 
         self.draw_handles()
@@ -201,20 +219,17 @@ class IDCardScannerApp:
             self.show_image()
 
     def draw_handles(self):
-        # 清除旧的控制线与节点
         for item in self.handle_ids + self.line_ids:
             self.canvas.delete(item)
         self.handle_ids.clear()
         self.line_ids.clear()
 
-        # 绘制四条连接边线
         for i in range(4):
             line = self.canvas.create_line(
                 0, 0, 0, 0, fill="#00FF00", width=2, dash=(4, 4)
             )
             self.line_ids.append(line)
 
-        # 绘制 4 个可拖拽圆点
         r = 7
         for i in range(4):
             handle = self.canvas.create_oval(
@@ -229,11 +244,9 @@ class IDCardScannerApp:
         for i in range(4):
             p1 = self.points[i]
             p2 = self.points[(i + 1) % 4]
-            # 更新线段
             self.canvas.coords(
                 self.line_ids[i], p1[0], p1[1], p2[0], p2[1]
             )
-            # 更新锚点
             self.canvas.coords(
                 self.handle_ids[i],
                 p1[0] - r,
@@ -251,7 +264,6 @@ class IDCardScannerApp:
 
     def on_mouse_drag(self, event):
         if self.drag_idx is not None:
-            # 限制拖动范围在 Canvas 内部
             cw = self.canvas.winfo_width()
             ch = self.canvas.winfo_height()
             nx = max(0, min(event.x, cw))
@@ -272,18 +284,19 @@ class IDCardScannerApp:
             self.current_idx += 1
             self.show_image()
 
-    def process_current(self):
+    def _get_processed_image(self):
+        """核心处理函数：完成透视校正 + 边缘深色自动替换为白色"""
         if self.raw_bgr_img is None:
-            return
+            return None, 0, 0
 
         try:
             target_w_mm = float(self.entry_w.get())
             target_h_mm = float(self.entry_h.get())
         except ValueError:
             messagebox.showerror("输入错误", "请确认宽度和高度数值填写正确！")
-            return
+            return None, 0, 0
 
-        # 计算映射回原图的高清坐标
+        # 计算高清映射坐标
         src_pts = np.float32(
             [
                 [p[0] / self.display_scale, p[1] / self.display_scale]
@@ -291,7 +304,6 @@ class IDCardScannerApp:
             ]
         )
 
-        # 300 DPI 下的标准输出分辨率
         dpi = 300
         out_w_px = int(round(target_w_mm / 25.4 * dpi))
         out_h_px = int(round(target_h_mm / 25.4 * dpi))
@@ -305,7 +317,7 @@ class IDCardScannerApp:
             ]
         )
 
-        # 梯形透视校正变换
+        # 1. 梯形透视校正
         M = cv2.getPerspectiveTransform(src_pts, dst_pts)
         warped = cv2.warpPerspective(
             self.raw_bgr_img,
@@ -314,14 +326,110 @@ class IDCardScannerApp:
             flags=cv2.INTER_CUBIC,
         )
 
-        # 记录处理结果
-        self.processed_records.append((warped, target_w_mm, target_h_mm))
+        # 2. 如果开启了深色边缘去除功能
+        if self.var_remove_dark.get():
+            try:
+                thresh_val = float(self.spin_thresh.get())
+            except ValueError:
+                thresh_val = 80.0
+
+            gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
+
+            # 阈值化：找出所有低于阈值的深色像素
+            _, dark_mask = cv2.threshold(
+                gray, thresh_val, 255, cv2.THRESH_BINARY_INV
+            )
+
+            # 提取连通至图像四周外边缘的深色区域 (采用 FloodFill 漫水填充)
+            ff_mask = np.zeros(
+                (out_h_px + 2, out_w_px + 2), dtype=np.uint8
+            )
+
+            # 在漫水填充前，先复制深色掩膜
+            dark_seed_mask = dark_mask.copy()
+
+            # 遍历四周边缘像素点作为种子点
+            seed_points = []
+            for x in range(0, out_w_px, 3):
+                if dark_seed_mask[0, x] == 255:
+                    seed_points.append((x, 0))
+                if dark_seed_mask[out_h_px - 1, x] == 255:
+                    seed_points.append((x, out_h_px - 1))
+            for y in range(0, out_h_px, 3):
+                if dark_seed_mask[y, 0] == 255:
+                    seed_points.append((0, y))
+                if dark_seed_mask[y, out_w_px - 1] == 255:
+                    seed_points.append((out_w_px - 1, y))
+
+            for sx, sy in seed_points:
+                if dark_seed_mask[sy, sx] == 255:
+                    cv2.floodFill(
+                        dark_seed_mask,
+                        ff_mask,
+                        (sx, sy),
+                        128,
+                        flags=4 | (128 << 8),
+                    )
+
+            # 将连通到边缘的深色背景填充为纯白色 (255, 255, 255)
+            border_dark_pixels = dark_seed_mask == 128
+            warped[border_dark_pixels] = [255, 255, 255]
+
+            # 边缘做 2px 微缩防羽化残影
+            shrink_px = 2
+            warped[:shrink_px, :] = [255, 255, 255]
+            warped[-shrink_px:, :] = [255, 255, 255]
+            warped[:, :shrink_px] = [255, 255, 255]
+            warped[:, -shrink_px:] = [255, 255, 255]
+
+        return warped, target_w_mm, target_h_mm
+
+    def preview_crop(self):
+        """生成并弹窗展示校正后的真实预览"""
+        warped, w_mm, h_mm = self._get_processed_image()
+        if warped is None:
+            return
+
+        # 创建独立的预览窗口
+        preview_win = tk.Toplevel(self.root)
+        preview_win.title("校正效果预览")
+        preview_win.geometry("700x500")
+
+        # 将图像缩放到适合预览的大小
+        h, w = warped.shape[:2]
+        max_preview_size = 600
+        scale = min(max_preview_size / w, max_preview_size / h, 1.0)
+        disp_w = int(w * scale)
+        disp_h = int(h * scale)
+
+        preview_bgr = cv2.resize(warped, (disp_w, disp_h))
+        preview_rgb = cv2.cvtColor(preview_bgr, cv2.COLOR_BGR2RGB)
+        img_pil = Image.fromarray(preview_rgb)
+        img_tk = ImageTk.PhotoImage(img_pil)
+
+        lbl_img = ttk.Label(preview_win, image=img_tk)
+        lbl_img.image = img_tk  # 防止垃圾回收
+        lbl_img.pack(padx=20, pady=20, expand=True)
+
+        lbl_tip = ttk.Label(
+            preview_win,
+            text=f"实际物理导出尺寸：{w_mm} mm x {h_mm} mm",
+            font=("Arial", 10, "bold"),
+        )
+        lbl_tip.pack(pady=5)
+
+    def process_current(self):
+        warped, w_mm, h_mm = self._get_processed_image()
+        if warped is None:
+            return
+
+        self.processed_records.append((warped, w_mm, h_mm))
         self.lbl_status.config(
             text=f"已就绪页数: {len(self.processed_records)}"
         )
         messagebox.showinfo(
             "提示",
-            f"当前图片已校正保存！\n累计保存: {len(self.processed_records)} 张",
+            f"当前图片已成功校正保存！\n当前队列中共有: {len(self.processed_records)} 张图片",
         )
 
     def export_pdf(self):
@@ -339,29 +447,21 @@ class IDCardScannerApp:
 
         pdf_canvas = canvas.Canvas(save_path, pagesize=A4)
         a4_w_pt, a4_h_pt = A4
-
         temp_files = []
-
-        # 默认一页 A4 排版最多 2 张卡片 (正面在上，背面在下)
         max_per_page = 2
 
         for idx, (warped_bgr, w_mm, h_mm) in enumerate(self.processed_records):
             page_slot = idx % max_per_page
 
-            # 保存临时图片文件供 ReportLab 使用
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
             cv2.imwrite(tmp.name, warped_bgr)
             temp_files.append(tmp.name)
             tmp.close()
 
-            # 将物理毫米转换为 ReportLab 的 pt 单位
             card_w_pt = w_mm * mm
             card_h_pt = h_mm * mm
-
-            # 居中水平对齐
             x_pt = (a4_w_pt - card_w_pt) / 2.0
 
-            # 垂直位置计算: 第一张置于上半页，第二张置于下半页
             if page_slot == 0:
                 y_pt = (a4_h_pt * 0.65) - (card_h_pt / 2.0)
             else:
@@ -375,13 +475,11 @@ class IDCardScannerApp:
                 height=card_h_pt,
             )
 
-            # 满两张或已是最后一张时换页
             if page_slot == 1 or idx == len(self.processed_records) - 1:
                 pdf_canvas.showPage()
 
         pdf_canvas.save()
 
-        # 清理临时文件
         for tf in temp_files:
             try:
                 os.remove(tf)

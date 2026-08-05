@@ -2,9 +2,10 @@
 
 一个收集“单文件 Python 小工具”的仓库 —— 每个工具尽量做小、单一、可直接运行或打包成 exe，便于快速复用、分享与学习。
 
-本仓库当前包含两个主要工具目录：
+本仓库当前包含三个主要工具目录：
 - ID_to_PDF：带 GUI 的图片（或身份证/证件）批量处理与导出 PDF 工具。
 - movie_sorter：用于扫描影视库、统计子文件夹体积并按体积排序的 GUI 工具。
+- pc_mqtt：Windows 专用的 MQTT 事件 -> 本地 BAT 映射执行器（带 GUI、托盘、全局热键），常用于 Home Assistant 与 PC 联动。
 
 ---
 
@@ -17,6 +18,12 @@ ID_to_PDF/         # 图像 -> PDF，带预览、裁切、DPI/尺寸调整、导
 movie_sorter/      # 影视文件夹体积扫描与排序工具（GUI）
   ├─ movie_sorter_gui.py  # 主脚本：Tkinter GUI，实现目录选择、递归计算大小、导出排序 TXT
   └─ dist_exe.rar  # （已打包的 exe 的归档，供参考）
+
+pc_mqtt/           # Windows 专用：订阅 MQTT 事件并映射执行本地 BAT（带 GUI、托盘、全局热键）
+  ├─ pc_mqtt_gui.py   # GUI + 托盘 + 全局热键
+  ├─ pc_mqtt_core.py  # MQTT 客户端与事件 -> BAT 执行核心逻辑
+  ├─ pc_mqtt_config.json (运行时生成) # 配置示例存放位置
+  └─ version_info.txt  # PyInstaller 版本信息（打包时使用）
 ```
 
 ---
@@ -30,6 +37,7 @@ movie_sorter/      # 影视文件夹体积扫描与排序工具（GUI）
   - OpenCV (cv2) —— 高级图像处理（检测、透视变换等）
   - numpy —— 数组与数值处理（图像数组运算）
   - reportlab —— 生成 PDF（可合并图像到 PDF）
+  - paho-mqtt / pystray / pillow —— pc_mqtt 的运行时依赖（详见 pc_mqtt/README.md）
   - 其它：tkinter（标准库 GUI），tkinter.ttk（主题控件）
 
 注意：各工具的具体依赖会在各自目录的 README 中列出，安装前请参考对应目录说明。
@@ -96,6 +104,29 @@ python3 movie_sorter/movie_sorter_gui.py
 
 ---
 
+### 3) pc_mqtt（路径：pc_mqtt/）
+功能亮点：
+- Windows 专用工具：订阅指定 MQTT Topic，根据收到的 payload（事件名）映射并执行本地 BAT 文件，常用于 Home Assistant 与 PC 的联动场景。
+- 带 GUI（映射表管理）、托盘运行与全局热键（例如 Ctrl+Alt+M 显示/隐藏，Ctrl+Alt+Q 退出）。
+- 配置文件（pc_mqtt_config.json）在 exe/脚本同目录生成/读取，日志（pc_mqtt_runner.log）可在 GUI 中实时查看。
+- 支持将配置与映射表保存在本地，常用打包为单文件 exe（PyInstaller --onefile）。
+
+运行（开发/调试）：
+```bash
+python pc_mqtt/pc_mqtt_gui.py
+```
+
+常见依赖安装示例：
+```bash
+pip install paho-mqtt pystray pillow
+```
+
+运行注意：
+- 该工具为 Windows 专用（使用 WinAPI 注册全局热键、以 cmd.exe 执行 BAT、托盘图标等）。
+- 在打包为 single-file exe 时，建议将 pc_mqtt_config.json 放在 exe 同目录以便编辑与持久化配置。
+
+---
+
 ## 如何运行（最短路径）
 1. 克隆仓库：
 ```bash
@@ -104,22 +135,30 @@ cd little_tool
 ```
 2. 安装依赖（根据你要运行的工具选择）：
 ```bash
+# ID_to_PDF 相关依赖
 pip install pillow opencv-python numpy reportlab
-# 若只运行 movie_sorter，通常只需要 pillow（若无额外依赖）或仅标准库即可
+# pc_mqtt（Windows）依赖
+pip install paho-mqtt pystray pillow
+# movie_sorter 仅使用标准库/少量第三方库，通常无需额外安装
 ```
 3. 运行工具：
 - ID_to_PDF：python3 ID_to_PDF/core.py
 - movie_sorter：python3 movie_sorter/movie_sorter_gui.py
+- pc_mqtt（Windows）：python pc_mqtt/pc_mqtt_gui.py
 
 ---
 
 ## 打包/分发
 - movie_sorter 目录里已经有 dist_exe.rar（历史打包结果）；可直接参考或使用其中 exe。
-- ID_to_PDF 提供了 package.ps1（PowerShell），示例使用 PyInstaller 打包为单文件 exe。通用流程（示例）：
-  1. Windows 环境：安装 pyinstaller
-     pip install pyinstaller
-  2. 修改 package.ps1 中的图标/版本信息（如需要），运行 package.ps1（PowerShell）。
-  3. 检查 dist/ 下生成的 exe 并使用 UPX / NSIS 做进一步打包或安装器制作（可选）。
+- ID_to_PDF 提供了 package.ps1（PowerShell），示例使用 PyInstaller 打包为单文件 exe。
+- pc_mqtt 提供了 version_info.txt，可在使用 PyInstaller 打包时通过 `--version-file` 指定以嵌入版本信息。常用打包命令示例：
+```bash
+python -m PyInstaller --noconsole --onefile --version-file=pc_mqtt/version_info.txt pc_mqtt/pc_mqtt_gui.py
+```
+
+打包提示：
+- 对于 GUI 桌面程序，建议使用 `--noconsole`（或 `--windowed`）参数以隐藏控制台窗口。
+- 若使用 `--onefile`，把需要外部编辑的配置文件（如 `pc_mqtt_config.json`）与 exe 放在同一目录，避免将其打包到内部资源中。
 
 ---
 
@@ -133,10 +172,11 @@ pip install pillow opencv-python numpy reportlab
 
 ## 许可与联系方式
 - 当前仓库未指定许可证（若你打算开源/允许他人使用，请在仓库根目录添加 LICENSE，推荐 MIT）。
-- 如需我将本 README 提交到仓库或希望我按更正式/更简洁/英文的风格重写，告诉我你的偏好，我可以直接帮你提交（需要你确认目标仓库是 GE-all-the-time/little_tool，并授权我进行写操作）。
+- 如需我将本 README 提交到仓库或希望我按更正式/更简洁/英文的风格重写，我可以直接帮你提交（需要你确认目标仓库是 GE-all-the-time/little_tool 并允许我执行提交）。
 
 ---
 
 如果你愿意，我下一步可以：
-- 直接把上面的 README.md 提交到仓库（我可以为你创建/更新文件），或者
-- 根据你的口味把 README 改成更技术向、或更入门向、或英文版。你想怎样继续？
+- 把本 README 的更新提交到仓库（我已准备好提交），或
+- 把 README 同步为英文版或更技术向的版本，或者
+- 为 pc_mqtt 生成一个 PyInstaller spec 示例和一个示意的 `pc_mqtt_config.json` 示例文件并提交.

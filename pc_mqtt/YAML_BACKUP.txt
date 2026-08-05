@@ -1,0 +1,50 @@
+alias: 米家虚拟事件 -> PC 模式（MQTT）
+description: >
+  【作用】米家 App 里的三个“手动控制”通过【中枢网关产生虚拟事件】发出“事件名称(暗号)”， HA 监听虚拟事件实体变化后按事件名称分流，并通过
+  mqtt.publish 发布到 EMQX， 最终由 PC 端订阅脚本触发 Quicker 的 Ctrl+Shift+1/2/3。
+  【扩展】未来可新增更多事件名称、更多 payload、甚至改用 JSON payload 承载更复杂命令。
+triggers:
+  - entity_id: event.xiaomi_cn_1179623348_hub1_virtual_event_e_4_1
+    trigger: state
+conditions: []
+actions:
+  - variables:
+      mi_event_name: "{{ trigger.to_state.attributes['事件名称'] | default('') | trim }}"
+  - variables:
+      mapping:
+        pc_mode_study: study
+        pc_mode_livingroom: livingroom
+        pc_mode_livingroom_game: livingroom_game
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ mi_event_name == 'pc_mode_study' }}"
+        sequence:
+          - data:
+              topic: ha/pc/cmd/display_mode
+              payload: "{{ mapping['pc_mode_study'] }}"
+              qos: 1
+              retain: false
+            action: mqtt.publish
+      - conditions:
+          - condition: template
+            value_template: "{{ mi_event_name == 'pc_mode_livingroom' }}"
+        sequence:
+          - data:
+              topic: ha/pc/cmd/display_mode
+              payload: "{{ mapping['pc_mode_livingroom'] }}"
+              qos: 1
+              retain: false
+            action: mqtt.publish
+      - conditions:
+          - condition: template
+            value_template: "{{ mi_event_name == 'pc_mode_livingroom_game' }}"
+        sequence:
+          - data:
+              topic: ha/pc/cmd/display_mode
+              payload: "{{ mapping['pc_mode_livingroom_game'] }}"
+              qos: 1
+              retain: false
+            action: mqtt.publish
+    default: []
+mode: single

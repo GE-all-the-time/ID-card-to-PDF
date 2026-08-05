@@ -116,7 +116,7 @@ python pc_mqtt_gui.py
 打包建议（使用 PyInstaller）：
 - 常用命令示例（在项目根目录）：
 ```bash
-pyinstaller --noconsole --onefile --windowed --version-file=version_info.txt pc_mqtt_gui.py
+python -m PyInstaller --noconsole --onefile --version-file=version_info.txt pc_mqtt_gui.py
 ```
 说明：
 - `--onefile`：生成单文件 exe（程序会在临时目录解压运行）
